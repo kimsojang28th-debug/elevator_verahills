@@ -126,13 +126,14 @@ const ISSUE_TYPES = ['정지(동작불가)', '승객갇힘', '이상소음', '�
 const COST_STATUSES = ['미지급', '처리중', '지급완료', '무상AS', '기타'];
 
 function loadData() {
+  // 주의: 여기서는 절대 온라인 저장소(Firestore)에 쓰지 않습니다.
+  // 이 함수는 화면이 뜨기 전, 잠깐 보여줄 로컬 캐시 데이터만 만듭니다.
+  // 온라인 저장소에 실제로 처음 데이터를 올릴지 말지는 아래 onSnapshot 리스너에서만 판단합니다.
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
     try { return JSON.parse(raw); } catch (e) { /* fallthrough to seed */ }
   }
-  const seeded = seedData();
-  saveData(seeded);
-  return seeded;
+  return seedData();
 }
 
 function saveData(data) {
