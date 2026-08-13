@@ -86,9 +86,9 @@
 
 <main>
   <div class="helpbox">
-    이 페이지는 인터넷 연결 없이 이 컴퓨터의 이 브라우저 안에만 데이터가 저장되는 간단한 버전입니다.
-    다른 컴퓨터에서는 데이터가 보이지 않으니, 정기적으로 우측 상단 <b>"데이터 백업"</b> 버튼으로 파일을 저장해두세요.
-    실수로 브라우저 데이터를 지우면 이력이 사라질 수 있습니다.
+    이 페이지의 데이터는 온라인 저장소(Firebase)에 저장되어, 어떤 컴퓨터·브라우저에서 접속하더라도
+    같은 내용을 실시간으로 함께 보고 편집할 수 있습니다. 다만 만약을 대비해 정기적으로 우측 상단
+    <b>"데이터 백업"</b> 버튼으로 파일을 저장해두시는 것을 권장합니다.
   </div>
   <div id="view-dashboard" class="view"></div>
   <div id="view-repairs" class="view" style="display:none"></div>
@@ -97,10 +97,29 @@
 
 <div id="modal-root"></div>
 
-<footer class="note">승강기 고장·수리 이력관리 (로컬 저장 버전)</footer>
+<footer class="note">승강기 고장·수리 이력관리 (온라인 동기화 버전)</footer>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
-/* ============== 데이터 저장/불러오기 (localStorage) ============== */
+/* ============== Firebase 초기화 ============== */
+const firebaseConfig = {
+  apiKey: "AIzaSyCNnhPZT1I8PhD2qCQc3_JekuheqNWO484",
+  authDomain: "elevator-verahills.firebaseapp.com",
+  projectId: "elevator-verahills",
+  storageBucket: "elevator-verahills.firebasestorage.app",
+  messagingSenderId: "233456126930",
+  appId: "1:233456126930:web:b867176ba1da115cf1d60b",
+  measurementId: "G-18FNEHDNWR"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const stateDocRef = db.collection('elevatorApp').doc('state');
+
+/* ============== 데이터 저장/불러오기 ==============
+   - localStorage: 인터넷이 잠깐 끊겨도 화면이 바로 뜰 수 있도록 하는 임시 캐시(백업용)
+   - Firestore(stateDocRef): 실제 저장소. 모든 기기/브라우저가 이 데이터를 공유해서 봄
+*/
 const STORAGE_KEY = 'elevator_app_data_v1';
 
 const ISSUE_TYPES = ['정지(동작불가)', '승객갇힘', '이상소음', '문 열림/닫힘 불량', '운행 지연', '버튼/조작반 이상', '정기점검 지적사항', '기타'];
@@ -118,6 +137,10 @@ function loadData() {
 
 function saveData(data) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  stateDocRef.set(data).catch(err => {
+    console.error('Firestore 저장 실패:', err);
+    alert('온라인 저장소에 저장하지 못했습니다. 인터넷 연결 상태를 확인한 뒤 다시 시도해주세요.');
+  });
 }
 
 function seedData() {
@@ -777,7 +800,7 @@ function importBackup(event) {
     try {
       const data = JSON.parse(e.target.result);
       if (!data.elevators || !data.repairs) throw new Error('형식이 올바르지 않습니다.');
-      if (!confirm('현재 데이터를 백업 파일 내용으로 덮어씁니다. 계속하시겠습니까?')) return;
+      if (!confirm('이 파일을 불러오면 온라인 저장소의 데이터(모든 기기/브라우저에서 공유 중인 데이터)가 이 백업 파일 내용으로 덮어써집니다. 계속하시겠습니까?')) return;
       state = data;
       if (!state.nextRepairId) {
         state.nextRepairId = Math.max(0, ...state.repairs.map(r => r.id)) + 1;
@@ -804,6 +827,25 @@ function downloadFile(content, filename, mime) {
 
 /* ============== 시작 ============== */
 switchView('dashboard');
+
+/* ============== Firebase 실시간 동기화 ==============
+   - 온라인 저장소(Firestore)에 데이터가 이미 있으면 그 내용으로 화면을 갱신(다른 기기에서 입력한 내용 포함)
+   - 온라인 저장소가 비어있으면(최초 1회) 지금 이 브라우저의 데이터를 온라인 저장소로 올려 초기화
+   - 이후에는 다른 기기/브라우저에서 데이터가 바뀔 때마다 자동으로 화면이 갱신됨
+*/
+stateDocRef.onSnapshot((doc) => {
+  if (doc.exists) {
+    state = doc.data();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    switchView(currentView);
+  } else {
+    stateDocRef.set(state).catch(err => {
+      console.error('Firestore 최초 저장 실패:', err);
+    });
+  }
+}, (err) => {
+  console.error('Firestore 연결 오류:', err);
+});
 </script>
 </body>
 </html>
