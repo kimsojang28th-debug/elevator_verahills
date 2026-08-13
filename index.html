@@ -71,10 +71,12 @@
   </div>
   <div>
     <button class="btn" onclick="exportBackup()">데이터 백업(저장)</button>
-    <label class="btn" style="cursor:pointer;">
+    <label class="btn" id="import-label" style="cursor:pointer;display:none;">
       데이터 불러오기
       <input type="file" accept=".json" style="display:none" onchange="importBackup(event)">
     </label>
+    <button class="btn" id="login-btn" onclick="openLoginModal()">관리자 로그인</button>
+    <button class="btn" id="logout-btn" onclick="adminLogout()" style="display:none;background:#374151;color:#fff;">로그아웃(관리자)</button>
   </div>
 </header>
 
@@ -101,6 +103,7 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script>
 /* ============== Firebase 초기화 ============== */
 const firebaseConfig = {
@@ -114,7 +117,61 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+const auth = firebase.auth();
 const stateDocRef = db.collection('elevatorApp').doc('state');
+
+/* ============== 관리자 로그인 ==============
+   - 로그인하지 않은 사람: 조회만 가능 (isAdmin = false)
+   - 로그인한 사람(관리자 계정): 등록/수정/삭제 가능 (isAdmin = true)
+   - 실제 데이터 보호는 Firestore 보안 규칙(서버 쪽)에서 이루어짐. 여기 isAdmin은 화면 표시용.
+*/
+let isAdmin = false;
+
+function openLoginModal() {
+  openModal(`
+    <h3>관리자 로그인</h3>
+    <form id="login-form" onsubmit="return submitLogin(event)">
+      <div class="form-row"><label>이메일</label><input type="email" name="email" required autocomplete="username"></div>
+      <div class="form-row"><label>비밀번호</label><input type="password" name="password" required autocomplete="current-password"></div>
+      <div id="login-error" class="error-text" style="display:none;"></div>
+      <div class="modal-actions">
+        <div><span></span></div>
+        <div>
+          <button type="button" class="btn" onclick="closeModal()">취소</button>
+          <button type="submit" class="btn btn-primary">로그인</button>
+        </div>
+      </div>
+    </form>
+  `);
+}
+
+function submitLogin(e) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const email = fd.get('email');
+  const password = fd.get('password');
+  auth.signInWithEmailAndPassword(email, password)
+    .then(() => { closeModal(); })
+    .catch(() => {
+      const box = document.getElementById('login-error');
+      if (box) { box.style.display = 'block'; box.textContent = '로그인에 실패했습니다. 이메일/비밀번호를 확인해주세요.'; }
+    });
+  return false;
+}
+
+function adminLogout() {
+  if (!confirm('로그아웃하시겠습니까?')) return;
+  auth.signOut();
+}
+
+function updateAuthUI() {
+  const loginBtn = document.getElementById('login-btn');
+  const logoutBtn = document.getElementById('logout-btn');
+  const importLabel = document.getElementById('import-label');
+  if (loginBtn) loginBtn.style.display = isAdmin ? 'none' : 'inline-block';
+  if (logoutBtn) logoutBtn.style.display = isAdmin ? 'inline-block' : 'none';
+  if (importLabel) importLabel.style.display = isAdmin ? 'inline-block' : 'none';
+}
 
 /* ============== 데이터 저장/불러오기 ==============
    - localStorage: 인터넷이 잠깐 끊겨도 화면이 바로 뜰 수 있도록 하는 임시 캐시(백업용)
@@ -357,9 +414,9 @@ function renderRepairs() {
     <div class="toolbar">
       <h2>고장·수리 이력</h2>
       <div>
-        <button class="btn btn-danger" style="text-decoration:none;background:#fee2e2;" onclick="deleteSelectedRepairs()">선택 삭제</button>
+        ${isAdmin ? `<button class="btn btn-danger" style="text-decoration:none;background:#fee2e2;" onclick="deleteSelectedRepairs()">선택 삭제</button>` : ''}
         <button class="btn" onclick="exportRepairsCsv()">CSV 내보내기</button>
-        <button class="btn btn-primary" onclick="openRepairForm()">+ 신규 등록</button>
+        ${isAdmin ? `<button class="btn btn-primary" onclick="openRepairForm()">+ 신규 등록</button>` : ''}
       </div>
     </div>
     ${filterElevator ? `
@@ -423,7 +480,7 @@ function renderRepairs() {
     </div>
     <div class="panel table-wrap">
       <table>
-        <thead><tr><th style="width:32px;"><input type="checkbox" id="repairs-select-all" onchange="toggleSelectAllRepairs(this.checked)"></th><th>신고일시</th><th>동/호기</th><th>고장위치(층)</th><th>고장유형</th><th>증상</th><th>상태</th><th>처리업체</th><th>처리일시</th><th>비용</th><th>비용처리</th></tr></thead>
+        <thead><tr>${isAdmin ? `<th style="width:32px;"><input type="checkbox" id="repairs-select-all" onchange="toggleSelectAllRepairs(this.checked)"></th>` : ''}<th>신고일시</th><th>동/호기</th><th>고장위치(층)</th><th>고장유형</th><th>증상</th><th>상태</th><th>처리업체</th><th>처리일시</th><th>비용</th><th>비용처리</th></tr></thead>
         <tbody id="repairs-tbody"></tbody>
       </table>
     </div>
@@ -468,6 +525,7 @@ function toggleSelectAllRepairs(checked) {
 }
 
 function deleteSelectedRepairs() {
+  if (!isAdmin) { alert('관리자 로그인 후 이용해주세요.'); return; }
   if (selectedRepairIds.size === 0) { alert('삭제할 이력을 먼저 선택해주세요.'); return; }
   if (!confirm(`선택한 이력 ${selectedRepairIds.size}건을 삭제하시겠습니까?`)) return;
   state.repairs = state.repairs.filter(r => !selectedRepairIds.has(r.id));
@@ -498,12 +556,12 @@ function renderRepairsTable() {
   const tbody = document.getElementById('repairs-tbody');
   if (!tbody) return;
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="11" class="empty">해당 조건의 이력이 없습니다.</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${isAdmin ? 11 : 10}" class="empty">해당 조건의 이력이 없습니다.</td></tr>`;
   } else {
     tbody.innerHTML = rows.map(r => {
       const e = findElevator(r.elevator_id) || {};
       return `<tr onclick="openRepairForm(${r.id})">
-        <td onclick="event.stopPropagation()"><input type="checkbox" class="repair-check" ${selectedRepairIds.has(r.id) ? 'checked' : ''} onchange="toggleRepairSelect(${r.id}, this.checked)"></td>
+        ${isAdmin ? `<td onclick="event.stopPropagation()"><input type="checkbox" class="repair-check" ${selectedRepairIds.has(r.id) ? 'checked' : ''} onchange="toggleRepairSelect(${r.id}, this.checked)"></td>` : ''}
         <td>${fmtDT(r.report_date)}</td>
         <td>${esc(e.building)} ${esc(e.unit_no)}호기</td>
         <td>${esc(r.fault_floor) || '-'}</td>
@@ -536,8 +594,9 @@ function openRepairForm(id) {
   const nowLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 
   openModal(`
-    <h3>${isEdit ? '이력 수정' : '고장·수리 이력 등록'}</h3>
+    <h3>${isAdmin ? (isEdit ? '이력 수정' : '고장·수리 이력 등록') : '이력 상세보기'}</h3>
     <form id="repair-form" onsubmit="return submitRepairForm(event, ${isEdit ? existing.id : 'null'})">
+      <fieldset ${isAdmin ? '' : 'disabled'} style="border:none;padding:0;margin:0;">
       <div class="form-row">
         <label>승강기 *</label>
         <select name="elevator_id" required>${elevatorOptionsHtml(existing?.elevator_id)}</select>
@@ -571,11 +630,12 @@ function openRepairForm(id) {
       <div class="form-row"><label>비용처리여부</label>
         <select name="cost_status">${costStatuses.map(s => `<option value="${s}" ${(existing?.cost_status || '미지급') === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
       <div class="form-row"><label>비고</label><textarea name="memo" rows="2">${esc(existing?.memo)}</textarea></div>
+      </fieldset>
       <div class="modal-actions">
-        <div>${isEdit ? `<button type="button" class="btn btn-danger" onclick="deleteRepair(${existing.id})">삭제</button>` : '<span></span>'}</div>
+        <div>${isAdmin && isEdit ? `<button type="button" class="btn btn-danger" onclick="deleteRepair(${existing.id})">삭제</button>` : '<span></span>'}</div>
         <div>
-          <button type="button" class="btn" onclick="closeModal()">취소</button>
-          <button type="submit" class="btn btn-primary">저장</button>
+          <button type="button" class="btn" onclick="closeModal()">${isAdmin ? '취소' : '닫기'}</button>
+          ${isAdmin ? '<button type="submit" class="btn btn-primary">저장</button>' : ''}
         </div>
       </div>
     </form>
@@ -584,6 +644,7 @@ function openRepairForm(id) {
 
 function submitRepairForm(e, id) {
   e.preventDefault();
+  if (!isAdmin) { alert('관리자 로그인 후 이용해주세요.'); return false; }
   const fd = new FormData(e.target);
   const body = Object.fromEntries(fd.entries());
   body.cost = Number(body.cost || 0);
@@ -602,6 +663,7 @@ function submitRepairForm(e, id) {
 }
 
 function deleteRepair(id) {
+  if (!isAdmin) { alert('관리자 로그인 후 이용해주세요.'); return; }
   if (!confirm('이 이력을 삭제하시겠습니까?')) return;
   state.repairs = state.repairs.filter(r => r.id !== id);
   saveData(state);
@@ -630,13 +692,13 @@ function renderElevators() {
     <div class="toolbar">
       <h2>승강기 관리 (총 ${state.elevators.length}대)</h2>
       <div>
-        <button class="btn btn-danger" style="text-decoration:none;background:#fee2e2;" onclick="deleteSelectedElevators()">선택 삭제</button>
-        <button class="btn btn-primary" onclick="openElevatorForm()">+ 승강기 추가</button>
+        ${isAdmin ? `<button class="btn btn-danger" style="text-decoration:none;background:#fee2e2;" onclick="deleteSelectedElevators()">선택 삭제</button>` : ''}
+        ${isAdmin ? `<button class="btn btn-primary" onclick="openElevatorForm()">+ 승강기 추가</button>` : ''}
       </div>
     </div>
     <div class="panel table-wrap">
       <table>
-        <thead><tr><th style="width:32px;"><input type="checkbox" id="elevators-select-all" onchange="toggleSelectAllElevators(this.checked)"></th><th>동</th><th>호기</th><th>명칭</th><th>위치</th><th>제조사</th><th>설치일</th><th>상태</th><th>이력</th></tr></thead>
+        <thead><tr>${isAdmin ? `<th style="width:32px;"><input type="checkbox" id="elevators-select-all" onchange="toggleSelectAllElevators(this.checked)"></th>` : ''}<th>동</th><th>호기</th><th>명칭</th><th>위치</th><th>제조사</th><th>설치일</th><th>상태</th><th>이력</th></tr></thead>
         <tbody id="elevators-tbody"></tbody>
       </table>
     </div>
@@ -649,7 +711,7 @@ function renderElevatorsTable() {
   const rows = sortedElevators();
   tbody.innerHTML = rows.map(e => `
     <tr>
-      <td onclick="event.stopPropagation()"><input type="checkbox" class="elevator-check" ${selectedElevatorIds.has(e.id) ? 'checked' : ''} onchange="toggleElevatorSelect(${e.id}, this.checked)"></td>
+      ${isAdmin ? `<td onclick="event.stopPropagation()"><input type="checkbox" class="elevator-check" ${selectedElevatorIds.has(e.id) ? 'checked' : ''} onchange="toggleElevatorSelect(${e.id}, this.checked)"></td>` : ''}
       <td onclick="openElevatorForm(${e.id})">${esc(e.building)}</td>
       <td onclick="openElevatorForm(${e.id})">${esc(e.unit_no)}</td>
       <td onclick="openElevatorForm(${e.id})">${esc(e.name)}</td>
@@ -676,6 +738,7 @@ function toggleSelectAllElevators(checked) {
 }
 
 function deleteSelectedElevators() {
+  if (!isAdmin) { alert('관리자 로그인 후 이용해주세요.'); return; }
   if (selectedElevatorIds.size === 0) { alert('삭제할 승강기를 먼저 선택해주세요.'); return; }
   const hasRepairs = state.repairs.some(r => selectedElevatorIds.has(r.elevator_id));
   const msg = hasRepairs
@@ -699,8 +762,9 @@ function openElevatorForm(id) {
   const isEdit = !!existing;
   const statuses = ['운행중', '점검중', '고장', '폐지'];
   openModal(`
-    <h3>${isEdit ? '승강기 정보 수정' : '승강기 추가'}</h3>
+    <h3>${isAdmin ? (isEdit ? '승강기 정보 수정' : '승강기 추가') : '승강기 상세보기'}</h3>
     <form id="elevator-form" onsubmit="return submitElevatorForm(event, ${isEdit ? existing.id : 'null'})">
+      <fieldset ${isAdmin ? '' : 'disabled'} style="border:none;padding:0;margin:0;">
       <div class="grid2">
         <div class="form-row"><label>동 *</label><input type="text" name="building" required value="${esc(existing?.building)}" placeholder="예: 201 또는 외부"></div>
         <div class="form-row"><label>호기 *</label><input type="text" name="unit_no" required value="${esc(existing?.unit_no)}" placeholder="예: 1"></div>
@@ -718,11 +782,12 @@ function openElevatorForm(id) {
       <div class="form-row"><label>상태</label>
         <select name="status">${statuses.map(s => `<option ${(existing?.status || '운행중') === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
       <div class="form-row"><label>비고</label><textarea name="memo" rows="2">${esc(existing?.memo)}</textarea></div>
+      </fieldset>
       <div class="modal-actions">
-        <div>${isEdit ? `<button type="button" class="btn btn-danger" onclick="deleteElevator(${existing.id})">삭제</button>` : '<span></span>'}</div>
+        <div>${isAdmin && isEdit ? `<button type="button" class="btn btn-danger" onclick="deleteElevator(${existing.id})">삭제</button>` : '<span></span>'}</div>
         <div>
-          <button type="button" class="btn" onclick="closeModal()">취소</button>
-          <button type="submit" class="btn btn-primary">저장</button>
+          <button type="button" class="btn" onclick="closeModal()">${isAdmin ? '취소' : '닫기'}</button>
+          ${isAdmin ? '<button type="submit" class="btn btn-primary">저장</button>' : ''}
         </div>
       </div>
     </form>
@@ -731,6 +796,7 @@ function openElevatorForm(id) {
 
 function submitElevatorForm(e, id) {
   e.preventDefault();
+  if (!isAdmin) { alert('관리자 로그인 후 이용해주세요.'); return false; }
   const fd = new FormData(e.target);
   const body = Object.fromEntries(fd.entries());
   const dup = state.elevators.find(x => x.building === body.building && x.unit_no === body.unit_no && x.id !== id);
@@ -752,6 +818,7 @@ function submitElevatorForm(e, id) {
 }
 
 function deleteElevator(id) {
+  if (!isAdmin) { alert('관리자 로그인 후 이용해주세요.'); return; }
   const hasRepairs = state.repairs.some(r => r.elevator_id === id);
   const msg = hasRepairs
     ? '이 승강기에는 등록된 고장·수리 이력이 있습니다. 승강기와 관련 이력을 모두 삭제하시겠습니까?'
@@ -794,6 +861,7 @@ async function exportBackup() {
 }
 
 function importBackup(event) {
+  if (!isAdmin) { alert('관리자 로그인 후 이용해주세요.'); event.target.value = ''; return; }
   const file = event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
@@ -828,6 +896,17 @@ function downloadFile(content, filename, mime) {
 
 /* ============== 시작 ============== */
 switchView('dashboard');
+updateAuthUI();
+
+/* ============== 로그인 상태 감지 ==============
+   - 로그인/로그아웃 시 자동으로 isAdmin 값을 갱신하고, 현재 화면을 다시 그려서
+     등록/수정/삭제 버튼이 즉시 나타나거나 사라지도록 함
+*/
+auth.onAuthStateChanged((user) => {
+  isAdmin = !!user;
+  updateAuthUI();
+  switchView(currentView);
+});
 
 /* ============== Firebase 실시간 동기화 ==============
    - 온라인 저장소(Firestore)에 데이터가 이미 있으면 그 내용으로 화면을 갱신(다른 기기에서 입력한 내용 포함)
