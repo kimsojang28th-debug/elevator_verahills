@@ -95,6 +95,7 @@
   <button class="nav-btn active" data-view="dashboard" onclick="switchView('dashboard')">대시보드</button>
   <button class="nav-btn" data-view="repairs" onclick="switchView('repairs')">고장·수리 이력</button>
   <button class="nav-btn" data-view="elevators" onclick="switchView('elevators')">승강기 관리</button>
+  <button class="nav-btn" data-view="memos" onclick="switchView('memos')">승강기 메모</button>
 </nav>
 
 <main>
@@ -106,6 +107,7 @@
   <div id="view-dashboard" class="view"></div>
   <div id="view-repairs" class="view" style="display:none"></div>
   <div id="view-elevators" class="view" style="display:none"></div>
+  <div id="view-memos" class="view" style="display:none"></div>
 </main>
 
 <div id="modal-root"></div>
@@ -235,10 +237,18 @@ function seedData() {
       status: '운행중', memo: ''
     });
   }
-  return { elevators, repairs: [], nextRepairId: 1 };
+  return { elevators, repairs: [], nextRepairId: 1, memos: [], nextMemoId: 1 };
 }
 
-let state = loadData();
+/* 예전 백업 파일이나 예전에 저장된 온라인 데이터에는 memos 항목이 없을 수 있으므로,
+   화면에 쓰기 전에 항상 이 함수로 memos/nextMemoId 필드를 보정한다. */
+function ensureMemosField(s) {
+  if (!Array.isArray(s.memos)) s.memos = [];
+  if (!s.nextMemoId) s.nextMemoId = Math.max(0, ...s.memos.map(m => m.id || 0)) + 1;
+  return s;
+}
+
+let state = ensureMemosField(loadData());
 let currentView = 'dashboard';
 
 /* ============== 유틸 ============== */
@@ -304,6 +314,7 @@ function switchView(view) {
   if (view === 'dashboard') renderDashboard();
   if (view === 'repairs') renderRepairs();
   if (view === 'elevators') renderElevators();
+  if (view === 'memos') renderMemos();
 }
 
 /* ============== 대시보드 ============== */
@@ -842,6 +853,118 @@ function deleteElevator(id) {
   renderElevatorsTable();
 }
 
+/* ============== 승강기 메모 ==============
+   고장·수리 이력으로 등록하기 애매한 승강기 관련 메모(민원 내용, 특이사항, 안내 이력 등)를
+   날짜와 함께 자유롭게 기록. 최신 날짜순으로 정렬해서 보여주고, 내용으로 검색 가능.
+*/
+let memoFilters = { q: '' };
+
+function renderMemos() {
+  document.getElementById('view-memos').innerHTML = `
+    <div class="toolbar">
+      <h2>승강기 메모 (총 ${state.memos.length}건)</h2>
+      <div>
+        ${isAdmin ? `<button class="btn btn-primary" onclick="openMemoForm()">+ 메모 등록</button>` : ''}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="filters">
+        <div>
+          <label style="display:block;font-size:11px;color:#6b7280;margin-bottom:3px;">내용 검색</label>
+          <input id="f-memo-q" type="text" placeholder="메모 내용으로 검색" value="${esc(memoFilters.q)}" oninput="applyMemoFilters()">
+        </div>
+      </div>
+    </div>
+    <div id="memos-list"></div>
+  `;
+  renderMemosList();
+  const q = document.getElementById('f-memo-q');
+  if (q) q.focus({ preventScroll: true });
+}
+
+function applyMemoFilters() {
+  const input = document.getElementById('f-memo-q');
+  memoFilters.q = input ? input.value : '';
+  renderMemosList();
+  // 검색어 입력 중 목록이 다시 그려져도 커서가 입력창에 그대로 남아있도록 포커스를 복원
+  const q = document.getElementById('f-memo-q');
+  if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+
+function filteredMemos() {
+  const q = (memoFilters.q || '').trim().toLowerCase();
+  return [...state.memos]
+    .filter(m => !q || (m.content || '').toLowerCase().includes(q))
+    .sort((a, b) => {
+      if (a.date !== b.date) return (b.date || '').localeCompare(a.date || '');
+      return b.id - a.id;
+    });
+}
+
+function renderMemosList() {
+  const list = document.getElementById('memos-list');
+  if (!list) return;
+  const rows = filteredMemos();
+  if (rows.length === 0) {
+    list.innerHTML = `<div class="panel"><div class="empty">${memoFilters.q ? '검색 결과가 없습니다.' : '등록된 메모가 없습니다.'}</div></div>`;
+    return;
+  }
+  list.innerHTML = rows.map(m => `
+    <div class="panel" style="cursor:pointer;" onclick="openMemoForm(${m.id})">
+      <div style="font-weight:600;color:#2563eb;margin-bottom:8px;">${esc(m.date) || '-'}</div>
+      <div style="white-space:pre-wrap;font-size:14px;line-height:1.6;color:#111;">${esc(m.content)}</div>
+    </div>
+  `).join('');
+}
+
+function openMemoForm(id) {
+  const existing = id ? state.memos.find(m => m.id === id) : null;
+  const isEdit = !!existing;
+  const today = new Date().toISOString().slice(0, 10);
+  openModal(`
+    <h3>${isAdmin ? (isEdit ? '메모 수정' : '메모 등록') : '메모 상세보기'}</h3>
+    <form id="memo-form" onsubmit="return submitMemoForm(event, ${isEdit ? existing.id : 'null'})">
+      <fieldset ${isAdmin ? '' : 'disabled'} style="border:none;padding:0;margin:0;">
+      <div class="form-row"><label>날짜 *</label><input type="date" name="date" required value="${existing ? existing.date : today}"></div>
+      <div class="form-row"><label>메모 내용 *</label><textarea name="content" rows="6" required placeholder="예: 205동 2호기 관련 입주민 민원, 향후 점검 시 참고사항 등">${esc(existing?.content)}</textarea></div>
+      </fieldset>
+      <div class="modal-actions">
+        <div>${isAdmin && isEdit ? `<button type="button" class="btn btn-danger" onclick="deleteMemo(${existing.id})">삭제</button>` : '<span></span>'}</div>
+        <div>
+          <button type="button" class="btn" onclick="closeModal()">${isAdmin ? '취소' : '닫기'}</button>
+          ${isAdmin ? '<button type="submit" class="btn btn-primary">저장</button>' : ''}
+        </div>
+      </div>
+    </form>
+  `);
+}
+
+function submitMemoForm(e, id) {
+  e.preventDefault();
+  if (!isAdmin) { alert('관리자 로그인 후 이용해주세요.'); return false; }
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  if (id) {
+    const idx = state.memos.findIndex(m => m.id === id);
+    state.memos[idx] = { ...state.memos[idx], ...body };
+  } else {
+    state.memos.push({ id: state.nextMemoId++, ...body });
+  }
+  saveData(state);
+  closeModal();
+  renderMemosList();
+  return false;
+}
+
+function deleteMemo(id) {
+  if (!isAdmin) { alert('관리자 로그인 후 이용해주세요.'); return; }
+  if (!confirm('이 메모를 삭제하시겠습니까?')) return;
+  state.memos = state.memos.filter(m => m.id !== id);
+  saveData(state);
+  closeModal();
+  renderMemosList();
+}
+
 /* ============== 백업/복원 ============== */
 async function exportBackup() {
   const json = JSON.stringify(state, null, 2);
@@ -885,6 +1008,7 @@ function importBackup(event) {
       if (!state.nextRepairId) {
         state.nextRepairId = Math.max(0, ...state.repairs.map(r => r.id)) + 1;
       }
+      ensureMemosField(state);
       saveData(state);
       switchView(currentView);
       alert('데이터를 불러왔습니다.');
@@ -926,7 +1050,7 @@ auth.onAuthStateChanged((user) => {
 */
 stateDocRef.onSnapshot((doc) => {
   if (doc.exists) {
-    state = doc.data();
+    state = ensureMemosField(doc.data());
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     switchView(currentView);
   } else {
